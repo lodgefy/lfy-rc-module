@@ -30,7 +30,7 @@
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
 
 #if STATICIP
-byte ip[] = {10,0,1,100};
+byte ip[] = {192,168,2,2};
 #endif
 
 // Initialize the Ethernet server library
