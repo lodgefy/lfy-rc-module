@@ -76,6 +76,9 @@ void setup() {
   EthernetBonjour.begin("restduino");
 
   mySwitch.enableReceive(RECEIVER_PIN);
+  pinMode(TRANSMITTER_PIN,OUTPUT);
+  digitalWrite(TRANSMITTER_PIN,LOW);
+
 }
 
 //  url buffer size
@@ -176,8 +179,24 @@ void loop() {
             }
             else if (strAction == String("EXECUTE")) {
 #if DEBUG
-              Serial.print("execute mode activated"); 
+              Serial.print("execute mode activated");           
 #endif    
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
+              rcExecute();
             }
             else {
 #if DEBUG
@@ -321,7 +340,7 @@ void startRcLearning(EthernetClient client) {
   Serial.print("learn mode activated"); 
 #endif
   rcMode = 'l';
-  rcModeTick = 20;
+  rcModeTick = 1000;
   rcBuffer = String("");
 
   String jsonOut = "";
@@ -351,8 +370,8 @@ void writeBufferLearning(unsigned int length, unsigned int* raw) {
     if (rcModeTick < 0) {
       rcMode = 's';
     }
-    rcBuffer += raw[i];
-    rcBuffer += ",";
+    //rcBuffer += raw[i];
+    //cBuffer += ",";
 
 #if DEBUG
     Serial.print(raw[i]);
@@ -403,3 +422,29 @@ void closeConnection(EthernetClient client) {
 
 }
 
+//let’s build our instruments:
+
+void customDelay(unsigned long time) {
+    unsigned long end_time = micros() + time;
+    while(micros() < end_time);
+}
+
+//1000=1ms
+
+void setStateWithDelay(int pin, int state,int delayTime) {
+  if(state==1)
+    digitalWrite(pin,HIGH);
+  else
+    digitalWrite(pin,LOW);
+    
+  customDelay(delayTime);
+}
+
+void rcExecute() {
+
+
+setStateWithDelay(TRANSMITTER_PIN,0,976);
+
+
+  digitalWrite(TRANSMITTER_PIN,LOW);
+}
