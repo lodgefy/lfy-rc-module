@@ -41,8 +41,8 @@ byte ip[] = {192,168,2,2};
 // s = stopped
 // l = learning
 char rcMode = 's';
-int rcModeTime = 0;
-String rcBuffer = "";
+int rcModeTick = 0;
+String rcBuffer = String("");
 
 // Initialize the Ethernet server library
 // with the IP address and port you want to use 
@@ -87,10 +87,10 @@ void setup() {
 void loop() {
 
   if (rcMode == 'l') {
-    writeBufferLearning(mySwitch.getReceivedValue(), mySwitch.getReceivedBitlength(), mySwitch.getReceivedDelay(), mySwitch.getReceivedRawdata(),mySwitch.getReceivedProtocol());
+    writeBufferLearning(mySwitch.getReceivedBitlength(), mySwitch.getReceivedRawdata());
     mySwitch.resetAvailable();
   }
-
+  else {
 
   // needed to continue Bonjour/Zeroconf name registration
   EthernetBonjour.run();
@@ -231,10 +231,8 @@ void loop() {
 
               }
 
-              //  return status
-              client.println("HTTP/1.1 200 OK");
-              client.println("Content-Type: text/html");
-              client.println();
+              
+              showSuccess(client, jsonOut);
 
             }
 
@@ -299,12 +297,7 @@ void loop() {
             jsonOut += outValue;
             jsonOut += "\"}";
 
-            //  return value with wildcarded Cross-origin policy
-            client.println("HTTP/1.1 200 OK");
-            client.println("Content-Type: text/html");
-            client.println("Access-Control-Allow-Origin: *");
-            client.println();
-            client.println(jsonOut);
+            showSuccess(client, jsonOut);
           }
         } 
         else {
@@ -316,16 +309,10 @@ void loop() {
         break;
       }
     }
+  closeConnection(client);
+    
+  }
 
-    // give the web browser time to receive the data
-    delay(1);
-
-    // close the connection:
-    //client.stop();
-    client.stop();
-    while(client.status() != 0){
-      delay(5);
-    }
   }
 }
 
@@ -334,8 +321,13 @@ void startRcLearning(EthernetClient client) {
   Serial.print("learn mode activated"); 
 #endif
   rcMode = 'l';
-  rcModeTime = 300;
-  rcBuffer = "";
+  rcModeTick = 20;
+  rcBuffer = String("");
+
+  String jsonOut = "";
+  jsonOut += "{\"msg\":\"started Successful\"}";
+
+  showSuccess(client, jsonOut);
 }
 
 void stopRcLearning(EthernetClient client) {
@@ -343,16 +335,29 @@ void stopRcLearning(EthernetClient client) {
   Serial.print("learn mode deactivated"); 
 #endif
   rcMode = 's';
-  rcModeTime = 0;
+  rcModeTick = 0;
+
+  String jsonOut = "";
+  jsonOut += "{\"code\":\"";
+  jsonOut += rcBuffer;
+  jsonOut += "\"}";
+
+  showSuccess(client, jsonOut);
 }
 
-void writeBufferLearning(unsigned long decimal, unsigned int length, unsigned int delay, unsigned int* raw, unsigned int protocol) {
-
-
+void writeBufferLearning(unsigned int length, unsigned int* raw) {
   for (int i=0; i<= length*2; i++) {
+    rcModeTick--;
+    if (rcModeTick < 0) {
+      rcMode = 's';
+    }
+    rcBuffer += raw[i];
+    rcBuffer += ",";
+
+#if DEBUG
     Serial.print(raw[i]);
     Serial.print(",");
-
+#endif
   }
 }
 
@@ -365,6 +370,36 @@ void showError(EthernetClient client) {
   client.println("HTTP/1.1 404 Not Found");
   client.println("Content-Type: text/html");
   client.println();
+
+  closeConnection(client);
 }
 
+void showSuccess(EthernetClient client, String json) {
+
+#if DEBUG
+  Serial.println("success");
+#endif
+//  return value with wildcarded Cross-origin policy
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: text/html");
+  client.println("Access-Control-Allow-Origin: *");
+  client.println();
+  client.println(json);
+
+  closeConnection(client);
+}
+
+void closeConnection(EthernetClient client) {
+
+// give the web browser time to receive the data
+  delay(1);
+
+  // close the connection:
+  //client.stop();
+  client.stop();
+  while(client.status() != 0){
+    delay(5);
+  }
+
+}
 
