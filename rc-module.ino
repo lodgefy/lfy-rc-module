@@ -18,12 +18,17 @@
  
  */
 
-#define DEBUG false
-#define STATICIP false
+#define DEBUG true
+#define STATICIP true
+#define RECEIVER_PIN 0 // Receiver on inerrupt 0 => that is pin #2
+#define TRANSMITTER_PIN 7
 
 #include <SPI.h>
 #include <Ethernet.h>
 #include <EthernetBonjour.h>
+#include <RCSwitch.h>
+
+RCSwitch mySwitch = RCSwitch();
 
 // Enter a MAC address and IP address for your controller below.
 // The IP address will be dependent on your local network:
@@ -33,17 +38,18 @@ byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
 byte ip[] = {192,168,2,2};
 #endif
 
+// s = stopped
+// l = learning
+char rcMode = 's';
+int rcModeTime = 0;
+String rcBuffer = "";
+
 // Initialize the Ethernet server library
 // with the IP address and port you want to use 
 // (port 80 is default for HTTP):
-#if defined(ARDUINO) && ARDUINO >= 100
 EthernetServer server(80);
-#else
-Server server(80);
-#endif
 
-void setup()
-{
+void setup() {
 #if DEBUG
   //  turn on serial (for debuggin)
   Serial.begin(9600);
@@ -68,6 +74,8 @@ void setup()
   server.begin();
   
   EthernetBonjour.begin("restduino");
+
+  mySwitch.enableReceive(RECEIVER_PIN);
 }
 
 //  url buffer size
@@ -76,19 +84,22 @@ void setup()
 // Toggle case sensitivity
 #define CASESENSE true
 
-void loop()
-{
+void loop() {
+
+  if (rcMode == 'l') {
+    writeBufferLearning(mySwitch.getReceivedValue(), mySwitch.getReceivedBitlength(), mySwitch.getReceivedDelay(), mySwitch.getReceivedRawdata(),mySwitch.getReceivedProtocol());
+    mySwitch.resetAvailable();
+  }
+
+
   // needed to continue Bonjour/Zeroconf name registration
   EthernetBonjour.run();
   
   char clientline[BUFSIZE];
   int index = 0;
   // listen for incoming clients
-#if defined(ARDUINO) && ARDUINO >= 100
   EthernetClient client = server.available();
-#else
-  Client client = server.available();
-#endif
+
   if (client) {
 
     //  reset input buffer
@@ -121,6 +132,7 @@ void loop()
         //  string for further processing
         String urlString = String(clientline);
 
+
         //  extract the operation
         String op = urlString.substring(0,urlString.indexOf(' '));
 
@@ -133,73 +145,98 @@ void loop()
 #endif
         urlString.toCharArray(clientline, BUFSIZE);
 
+#if DEBUG
+        Serial.print("urlString: "); Serial.println(urlString);
+#endif
+
         //  get the first two parameters
-        char *pin = strtok(clientline,"/");
+        char *action = strtok(clientline,"/");
         char *value = strtok(NULL,"/");
+        String strAction = String(action);
+        String strValue = String(value);
 
         //  this is where we actually *do something*!
         char outValue[10] = "MU";
         String jsonOut = String();
 
-        if(pin != NULL){
-          if(value != NULL){
-
+        if(action != NULL){
 #if DEBUG
-            //  set the pin value
-            Serial.println("setting pin");
-#endif
+        Serial.print("action: "); Serial.println(action);
+        Serial.print("value: "); Serial.println(value);
+#endif         
+          if(value != NULL) {
 
-            //  select the pin
-            int selectedPin = atoi (pin);
-#if DEBUG
-            Serial.println(selectedPin);
-#endif
-
-            //  set the pin for output
-            pinMode(selectedPin, OUTPUT);
-
-            //  determine digital or analog (PWM)
-            if(strncmp(value, "HIGH", 4) == 0 || strncmp(value, "LOW", 3) == 0){
-
-#if DEBUG
-              //  digital
-              Serial.println("digital");
-#endif
-
-              if(strncmp(value, "HIGH", 4) == 0){
-#if DEBUG
-                Serial.println("HIGH");
-#endif
-                digitalWrite(selectedPin, HIGH);
+            if(strAction == String("LEARN")) {
+              if(strValue == String("START")) {
+                startRcLearning(client);
               }
-
-              if(strncmp(value, "LOW", 3) == 0){
-#if DEBUG
-                Serial.println("LOW");
-#endif
-                digitalWrite(selectedPin, LOW);
+              else if (strValue == String("STOP")) {
+                stopRcLearning(client);
               }
-
-            } 
+            }
+            else if (strAction == String("EXECUTE")) {
+#if DEBUG
+              Serial.print("execute mode activated"); 
+#endif    
+            }
             else {
+#if DEBUG
+              //  set the pin value
+              Serial.println("setting pin");
+#endif
+              //  select the pin
+              int selectedPin = atoi (action);
+#if DEBUG
+              Serial.println(selectedPin);
+#endif
+
+              //  set the pin for output
+              pinMode(selectedPin, OUTPUT);
+
+              //  determine digital or analog (PWM)
+              if(strncmp(value, "HIGH", 4) == 0 || strncmp(value, "LOW", 3) == 0) {
 
 #if DEBUG
-              //  analog
-              Serial.println("analog");
+                //  digital
+                Serial.println("digital");
 #endif
-              //  get numeric value
-              int selectedValue = atoi(value);              
+
+                if(strncmp(value, "HIGH", 4) == 0) {
 #if DEBUG
-              Serial.println(selectedValue);
+                  Serial.println("HIGH");
 #endif
-              analogWrite(selectedPin, selectedValue);
+                  digitalWrite(selectedPin, HIGH);
+                }
+
+                if(strncmp(value, "LOW", 3) == 0) {
+#if DEBUG
+                  Serial.println("LOW");
+#endif
+                  digitalWrite(selectedPin, LOW);
+                }
+
+              } 
+              else {
+
+#if DEBUG
+                //  analog
+                Serial.println("analog");
+#endif
+                //  get numeric value
+                int selectedValue = atoi(value);              
+#if DEBUG
+                Serial.println(selectedValue);
+#endif
+                analogWrite(selectedPin, selectedValue);
+
+              }
+
+              //  return status
+              client.println("HTTP/1.1 200 OK");
+              client.println("Content-Type: text/html");
+              client.println();
 
             }
-
-            //  return status
-            client.println("HTTP/1.1 200 OK");
-            client.println("Content-Type: text/html");
-            client.println();
 
           } 
           else {
@@ -208,6 +245,7 @@ void loop()
             Serial.println("reading pin");
 #endif
 
+            char* pin = action;
             //  determine analog or digital
             if(pin[0] == 'a' || pin[0] == 'A'){
 
@@ -272,12 +310,7 @@ void loop()
         else {
 
           //  error
-#if DEBUG
-          Serial.println("erroring");
-#endif
-          client.println("HTTP/1.1 404 Not Found");
-          client.println("Content-Type: text/html");
-          client.println();
+          showError(client);
 
         }
         break;
@@ -290,9 +323,48 @@ void loop()
     // close the connection:
     //client.stop();
     client.stop();
-      while(client.status() != 0){
+    while(client.status() != 0){
       delay(5);
     }
   }
 }
+
+void startRcLearning(EthernetClient client) {
+#if DEBUG
+  Serial.print("learn mode activated"); 
+#endif
+  rcMode = 'l';
+  rcModeTime = 300;
+  rcBuffer = "";
+}
+
+void stopRcLearning(EthernetClient client) {
+#if DEBUG
+  Serial.print("learn mode deactivated"); 
+#endif
+  rcMode = 's';
+  rcModeTime = 0;
+}
+
+void writeBufferLearning(unsigned long decimal, unsigned int length, unsigned int delay, unsigned int* raw, unsigned int protocol) {
+
+
+  for (int i=0; i<= length*2; i++) {
+    Serial.print(raw[i]);
+    Serial.print(",");
+
+  }
+}
+
+
+void showError(EthernetClient client) {
+
+#if DEBUG
+  Serial.println("erroring");
+#endif
+  client.println("HTTP/1.1 404 Not Found");
+  client.println("Content-Type: text/html");
+  client.println();
+}
+
 
