@@ -42,7 +42,8 @@ byte ip[] = {192,168,2,2};
 // l = learning
 char rcMode = 's';
 int rcModeTick = 0;
-String rcBuffer = String("");
+
+EthernetClient client;
 
 // Initialize the Ethernet server library
 // with the IP address and port you want to use 
@@ -61,7 +62,7 @@ void setup() {
 #else
   if (Ethernet.begin(mac) == 0) {
 #if DEBUG
-    Serial.println("Unable to set server IP address using DHCP");
+    Serial.println(F("Unable to set server IP address using DHCP"));
 #endif
     for(;;)
       ;
@@ -99,7 +100,7 @@ void loop() {
     char clientline[BUFSIZE];
     int index = 0;
     // listen for incoming clients
-    EthernetClient client = server.available();
+    client = server.available();
 
     if (client) {
 
@@ -108,6 +109,10 @@ void loop() {
 
       while (client.connected()) {
         if (client.available()) {
+
+
+
+
           char c = client.read();
 
           //  fill url the buffer
@@ -116,18 +121,8 @@ void loop() {
             continue;
           }  
 
-  #if DEBUG
-          Serial.print("client available bytes before flush: "); Serial.println(client.available());
-          Serial.print("request = "); Serial.println(clientline);
-  #endif
-
-          // Flush any remaining bytes from the client buffer
           client.flush();
 
-  #if DEBUG
-          // Should be 0
-          Serial.print("client available bytes after flush: "); Serial.println(client.available());
-  #endif
           //  convert clientline into a proper
           //  string for further processing
           String urlString = String(clientline);
@@ -141,7 +136,7 @@ void loop() {
   #endif
           urlString.toCharArray(clientline, BUFSIZE);
   #if DEBUG
-          Serial.print("urlString: "); Serial.println(urlString);
+          Serial.print(F("urlString: ")); Serial.println(urlString);
   #endif
           char *action = strtok(clientline,"/");
           char *value = strtok(NULL,"/");
@@ -149,21 +144,18 @@ void loop() {
           String jsonOut = String();
           if(action != NULL){
   #if DEBUG
-          Serial.print("action: "); Serial.println(action);
-          Serial.print("value: "); Serial.println(value);
+          Serial.print(F("action: ")); Serial.println(action);
+          Serial.print(F("value: ")); Serial.println(value);
   #endif         
             if(value != NULL) {
               if(strcmp (action,"LEARN") == 0) {
                 if(strcmp (value,"START") == 0) {
-                  startRcLearning(client);
-                }
-                else if (strcmp (value,"STOP") == 0) {
-                  stopRcLearning(client);
+                  startRcLearning();
                 }
               }
               else if (strcmp (action,"EXECUTE") == 0) {
   #if DEBUG
-    Serial.println("execute mode activated");           
+    Serial.println(F("execute mode activated"));
   #endif
                 rcExecute(value);
                 
@@ -171,7 +163,7 @@ void loop() {
               else {
   #if DEBUG
                 //  set the pin value
-                Serial.println("setting pin");
+                Serial.println(F("setting pin"));
   #endif
                 //  select the pin
                 int selectedPin = atoi (action);
@@ -184,18 +176,18 @@ void loop() {
                 if(strncmp(value, "HIGH", 4) == 0 || strncmp(value, "LOW", 3) == 0) {
   #if DEBUG
                   //  digital
-                  Serial.println("digital");
+                  Serial.println(F("digital"));
   #endif
 
                   if(strncmp(value, "HIGH", 4) == 0) {
   #if DEBUG
-                    Serial.println("HIGH");
+                    Serial.println(F("HIGH"));
   #endif
                     digitalWrite(selectedPin, HIGH);
                   }
                   if(strncmp(value, "LOW", 3) == 0) {
   #if DEBUG
-                    Serial.println("LOW");
+                    Serial.println(F("LOW"));
   #endif
                     digitalWrite(selectedPin, LOW);
                   }
@@ -203,22 +195,22 @@ void loop() {
                 else {
   #if DEBUG
                   //  analog
-                  Serial.println("analog");
+                  Serial.println(F("analog"));
   #endif
                   //  get numeric value
-                  int selectedValue = atoi(value);              
+                  int selectedValue = atoi(value);
   #if DEBUG
                   Serial.println(selectedValue);
   #endif
                   analogWrite(selectedPin, selectedValue);
                 }
-                showSuccess(client, jsonOut);
+                showSuccess("msg", "successful");
               }
             } 
             else {
   #if DEBUG
               //  read the pin value
-              Serial.println("reading pin");
+              Serial.println(F("reading pin"));
   #endif
 
               char* pin = action;
@@ -230,7 +222,7 @@ void loop() {
 
   #if DEBUG
                 Serial.println(selectedPin);
-                Serial.println("analog");
+                Serial.println(F("analog"));
   #endif
 
                 sprintf(outValue,"%d",analogRead(selectedPin));
@@ -247,7 +239,7 @@ void loop() {
 
   #if DEBUG
                 Serial.println(selectedPin);
-                Serial.println("digital");
+                Serial.println(F("digital"));
   #endif
 
                 pinMode(selectedPin, INPUT);
@@ -268,105 +260,102 @@ void loop() {
   #endif
               }
 
-              //  assemble the json output
-              jsonOut += "{\"";
-              jsonOut += pin;
-              jsonOut += "\":\"";
-              jsonOut += outValue;
-              jsonOut += "\"}";
-
-              showSuccess(client, jsonOut);
+              showSuccess("pin", outValue);
             }
           } 
           else {
 
             //  error
-            showError(client);
+            showError();
 
           }
           break;
         }
       }
-    closeConnection(client);
+    //closeConnection();
       
     }
 
   }
 }
 
-void startRcLearning(EthernetClient client) {
+void startRcLearning() {
 #if DEBUG
-  Serial.println("learn mode activated"); 
+  Serial.println(F("learn mode activated")); 
 #endif
   rcMode = 'l';
-  rcModeTick = 1000;
-  rcBuffer = String("");
+  rcModeTick = 5000;
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: text/html");
+  client.println("Access-Control-Allow-Origin: *");
+  client.println();
+  client.print("{'code':'");
 
-  String jsonOut = "";
-  jsonOut += "{\"msg\":\"started Successful\"}";
-
-  showSuccess(client, jsonOut);
-}
-
-void stopRcLearning(EthernetClient client) {
-#if DEBUG
-  Serial.println("learn mode deactivated"); 
-#endif
-  rcMode = 's';
-  rcModeTick = 0;
-
-  String jsonOut = "";
-  jsonOut += "{\"code\":\"";
-  jsonOut += rcBuffer;
-  jsonOut += "\"}";
-
-  showSuccess(client, jsonOut);
+  //showSuccess("msg", "Started Successful");
 }
 
 void writeBufferLearning(unsigned int length, unsigned int* raw) {
   for (int i=0; i<= length*2; i++) {
     rcModeTick--;
-    if (rcModeTick < 0) {
-      rcMode = 's';
-    }
+
     //rcBuffer += raw[i];
-    //cBuffer += ",";
 
 #if DEBUG
     Serial.print(raw[i]);
-    Serial.print(",");
+    Serial.print(F(","));
 #endif
+    if (client) {
+      client.print(raw[i]);
+    }
+
+    if (rcModeTick < 0) {
+      rcMode = 's';
+
+      client.print("'}");
+      closeConnection();
+      break;
+    }
+    else
+    {
+      client.print(F(","));
+      client.flush();
+    }
+    
   }
 }
 
-void showError(EthernetClient client) {
+void showError() {
 
 #if DEBUG
-  Serial.println("erroring");
+  Serial.println(F("erroring"));
 #endif
   client.println("HTTP/1.1 404 Not Found");
   client.println("Content-Type: text/html");
   client.println();
 
-  closeConnection(client);
+  closeConnection();
 }
 
-void showSuccess(EthernetClient client, String json) {
+void showSuccess(char* key, char* value) {
 
 #if DEBUG
-  Serial.println("success");
+  Serial.println(F("success"));
 #endif
 //  return value with wildcarded Cross-origin policy
   client.println("HTTP/1.1 200 OK");
   client.println("Content-Type: text/html");
   client.println("Access-Control-Allow-Origin: *");
   client.println();
-  client.println(json);
+  client.print("{'");
+  client.print(key);
+  client.print("':'");
+  client.print(value);
+  client.print("'}");
 
-  closeConnection(client);
+  closeConnection();
 }
 
-void closeConnection(EthernetClient client) {
+void closeConnection() {
 
 // give the web browser time to receive the data
   delay(1);
@@ -390,9 +379,9 @@ void customDelay(unsigned long time) {
 
 void setStateWithDelay(int pin, int state,int delayTime) {
 #if DEBUG
-  Serial.print("state: ");
+  Serial.print(F("state: "));
   Serial.print(state);
-  Serial.print(" delayTime: ");
+  Serial.print(F(" delayTime: "));
   Serial.println(delayTime);
 #endif
   if(state==1)
@@ -411,24 +400,25 @@ void rcExecute(char strCode[]) {
   int delayTime = atoi (strDelayTime);
   //int startDelayTime = strtok(NULL,",");
 #if DEBUG
-  Serial.println("Delay: ");
+  Serial.println(F("Delay: "));
   Serial.println(delayTime);
-  Serial.println("Codes: ");
+  Serial.println(F("Codes: "));
   Serial.println(codes);
-  Serial.println("Size: ");
+  Serial.println(F("Size: "));
   Serial.println(strlen(codes));
 
 #endif
 
-for(int j=0; j<10; j++){
-  setStateWithDelay(TRANSMITTER_PIN,0,11284);
+  for(int j=0; j<10; j++){
+    setStateWithDelay(TRANSMITTER_PIN,0,11284);
 
-  for (int i = 0; i < strlen(codes) ; i++) {
-    int code = (codes[i] - '0') + 1;
-    setStateWithDelay(TRANSMITTER_PIN,(i + 1) % 2,delayTime * code);
+    for (int i = 0; i < strlen(codes) ; i++) {
+      int code = (codes[i] - '0') + 1;
+      setStateWithDelay(TRANSMITTER_PIN,(i + 1) % 2,delayTime * code);
+    }
+    digitalWrite(TRANSMITTER_PIN,LOW);
   }
-  digitalWrite(TRANSMITTER_PIN,LOW);
-}
+  showSuccess("msg", "success");
 
 
 }
