@@ -1,26 +1,19 @@
 /*
- RESTduino
- 
- A REST-style interface to the Arduino via the 
- Wiznet Ethernet shield.
- 
- Based on David A. Mellis's "Web Server" ethernet
- shield example sketch.
+ Lodgefy RC-Module
  
  Circuit:
  * Ethernet shield attached to pins 10, 11, 12, 13
+ * RC Transmitter attached to pin 07
+ * RC Receiver attached to pin 02
  
- created 04/12/2011
- by Jason J. Gullickson
- 
- added 10/16/2011
- by Edward M. Goldberg - Optional Debug flag
+ Arduino 1.0.6
  
  */
 
 #define DEBUG false
 #define STATICIP true
-#define RECEIVER_PIN 0 // Receiver on inerrupt 0 => that is pin #2
+#define RECEIVER_PIN_INTERRUPT 0 // Receiver on inerrupt 0 => that is pin #2
+#define RECEIVER_PIN 2 
 #define TRANSMITTER_PIN 7
 
 #include <SPI.h>
@@ -35,8 +28,10 @@ RCSwitch mySwitch = RCSwitch();
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
 
 #if STATICIP
-byte ip[] = {192,168,2,2};
+byte myip[] = {192,168,2,2};
 #endif
+byte serverip[] = {192,168,2,1};
+int serverport = 8080;
 
 // s = stopped
 // l = learning
@@ -58,7 +53,7 @@ void setup() {
 
   // start the Ethernet connection and the server:
 #if STATICIP
-  Ethernet.begin(mac, ip);
+  Ethernet.begin(mac, myip);
 #else
   if (Ethernet.begin(mac) == 0) {
 #if DEBUG
@@ -73,20 +68,25 @@ void setup() {
 #endif
 #endif
   server.begin();
-  
   EthernetBonjour.begin("restduino");
-
-  mySwitch.enableReceive(RECEIVER_PIN);
+  mySwitch.enableReceive(RECEIVER_PIN_INTERRUPT);
   pinMode(TRANSMITTER_PIN,OUTPUT);
   digitalWrite(TRANSMITTER_PIN,LOW);
+  webHook(0, 1);
 
 }
 
-//  url buffer size
 #define BUFSIZE 255
-
-// Toggle case sensitivity
 #define CASESENSE true
+
+int lambda;   // on pulse clock width (if fosc = 2KHz than lambda = 500 us)
+static unsigned long buffer; //buffer for received data storage
+ struct rfControl    //Struct for RF Remote Controls  
+ {  
+   unsigned long addr; //ADDRESS CODE  
+   boolean btn1;    //BUTTON 1  
+   boolean btn2;    //BUTTON 2  
+ }; 
 
 void loop() {
 
@@ -94,212 +94,203 @@ void loop() {
     writeBufferLearning(mySwitch.getReceivedBitlength(), mySwitch.getReceivedRawdata());
     mySwitch.resetAvailable();
   }
+  if (rcMode == 'p') {
+
+    rcModeTick--;
+    if (rcModeTick < 0) {
+      rcMode = 's';
+
+      client.print("'}");
+      closeConnection();
+    }
+    else
+    {
+      struct rfControl rfControl_1; 
+      if(ACT_HT6P20B_RX(rfControl_1))  
+      {  
+        client.print(buffer, BIN);
+        rcModeTick = 0;
+      }
+    }
+  }
   else {
+    //verify if something happened in normal mode
+    struct rfControl rfControl_1;   
+    if(ACT_HT6P20B_RX(rfControl_1))  
+    {  
+#if DEBUG
+      Serial.print("Buffer: "); Serial.println(buffer, BIN); 
+      Serial.println();
+#endif
+      webHook(1, buffer);
+    }  
     EthernetBonjour.run();
-    
     char clientline[BUFSIZE];
     int index = 0;
-    // listen for incoming clients
     client = server.available();
-
     if (client) {
-
-      //  reset input buffer
       index = 0;
-
       while (client.connected()) {
         if (client.available()) {
-
-
-
-
           char c = client.read();
-
-          //  fill url the buffer
-          if(c != '\n' && c != '\r' && index < BUFSIZE){ // Reads until either an eol character is reached or the buffer is full
+          if(c != '\n' && c != '\r' && index < BUFSIZE){
             clientline[index++] = c;
             continue;
           }  
 
           client.flush();
-
-          //  convert clientline into a proper
-          //  string for further processing
           String urlString = String(clientline);
-          //  extract the operation
           String op = urlString.substring(0,urlString.indexOf(' '));
-          //  we're only interested in the first part...
           urlString = urlString.substring(urlString.indexOf('/'), urlString.indexOf(' ', urlString.indexOf('/')));
-          //  put what's left of the URL back in client line
-  #if CASESENSE
+#if CASESENSE
           urlString.toUpperCase();
-  #endif
+#endif
           urlString.toCharArray(clientline, BUFSIZE);
-  #if DEBUG
+#if DEBUG
           Serial.print(F("urlString: ")); Serial.println(urlString);
-  #endif
+#endif
           char *action = strtok(clientline,"/");
           char *value = strtok(NULL,"/");
           char outValue[10] = "MU";
           String jsonOut = String();
           if(action != NULL){
-  #if DEBUG
+#if DEBUG
           Serial.print(F("action: ")); Serial.println(action);
           Serial.print(F("value: ")); Serial.println(value);
-  #endif         
+#endif         
             if(value != NULL) {
               if(strcmp (action,"LEARN") == 0) {
-                if(strcmp (value,"START") == 0) {
+                if(strcmp (value,"FREE") == 0) {
                   startRcLearning();
-                }
+                } else if(strcmp (value,"PPA") == 0) {
+                  startPpaLearning();
+                } 
               }
               else if (strcmp (action,"EXECUTE") == 0) {
-  #if DEBUG
-    Serial.println(F("execute mode activated"));
-  #endif
+#if DEBUG
+                Serial.println(F("execute mode activated"));
+#endif
                 rcExecute(value);
+              }
+              else if (strcmp (action,"PPA") == 0) {
+#if DEBUG
+                Serial.println(F("ppa mode activated"));
+#endif
+                ppaExecute(value);
                 
               }
-              else {
-  #if DEBUG
-                //  set the pin value
-                Serial.println(F("setting pin"));
-  #endif
-                //  select the pin
-                int selectedPin = atoi (action);
-  #if DEBUG
-                Serial.println(selectedPin);
-  #endif
-                //  set the pin for output
-                pinMode(selectedPin, OUTPUT);
-                //  determine digital or analog (PWM)
-                if(strncmp(value, "HIGH", 4) == 0 || strncmp(value, "LOW", 3) == 0) {
-  #if DEBUG
-                  //  digital
-                  Serial.println(F("digital"));
-  #endif
-
-                  if(strncmp(value, "HIGH", 4) == 0) {
-  #if DEBUG
-                    Serial.println(F("HIGH"));
-  #endif
-                    digitalWrite(selectedPin, HIGH);
-                  }
-                  if(strncmp(value, "LOW", 3) == 0) {
-  #if DEBUG
-                    Serial.println(F("LOW"));
-  #endif
-                    digitalWrite(selectedPin, LOW);
-                  }
-                } 
-                else {
-  #if DEBUG
-                  //  analog
-                  Serial.println(F("analog"));
-  #endif
-                  //  get numeric value
-                  int selectedValue = atoi(value);
-  #if DEBUG
-                  Serial.println(selectedValue);
-  #endif
-                  analogWrite(selectedPin, selectedValue);
-                }
-                showSuccess("msg", "successful");
-              }
-            } 
-            else {
-  #if DEBUG
-              //  read the pin value
-              Serial.println(F("reading pin"));
-  #endif
-
-              char* pin = action;
-              //  determine analog or digital
-              if(pin[0] == 'a' || pin[0] == 'A'){
-
-                //  analog
-                int selectedPin = pin[1] - '0';
-
-  #if DEBUG
-                Serial.println(selectedPin);
-                Serial.println(F("analog"));
-  #endif
-
-                sprintf(outValue,"%d",analogRead(selectedPin));
-
-  #if DEBUG
-                Serial.println(outValue);
-  #endif
-
-              } 
-              else if(pin[0] != NULL) {
-
-                //  digital
-                int selectedPin = pin[0] - '0';
-
-  #if DEBUG
-                Serial.println(selectedPin);
-                Serial.println(F("digital"));
-  #endif
-
-                pinMode(selectedPin, INPUT);
-
-                int inValue = digitalRead(selectedPin);
-
-                if(inValue == 0){
-                  sprintf(outValue,"%s","LOW");
-                  //sprintf(outValue,"%d",digitalRead(selectedPin));
-                }
-
-                if(inValue == 1){
-                  sprintf(outValue,"%s","HIGH");
-                }
-
-  #if DEBUG
-                Serial.println(outValue);
-  #endif
-              }
-
-              showSuccess("pin", outValue);
             }
           } 
           else {
-
-            //  error
             showError();
-
           }
           break;
         }
       }
-    //closeConnection();
-      
     }
-
   }
 }
+void webHook(int type, unsigned long code) {
+
+  if (client.connect(serverip, serverport)) {
+    client.print("GET /");
+    if (type == 0) {
+     client.print("started");
+    } else if (type == 1) {
+      client.print("code");
+    }
+    client.print("/");
+    client.print(code, BIN);
+    client.println(" HTTP/1.0");
+    client.println();
+
+    closeConnection();
+  } else {
+    
+  }
+}
+
+void startPpaLearning() {
+#if DEBUG
+  Serial.println(F("ppa learn mode activated")); 
+#endif
+  rcMode = 'p';
+  rcModeTick = 1000;
+  client.println(F("HTTP/1.1 200 OK"));
+  client.println(F("Content-Type: text/html"));
+  client.println(F("Access-Control-Allow-Origin: *"));
+  client.println();
+  client.print(F("{'code':'"));
+}
+
+boolean ACT_HT6P20B_RX(struct rfControl &_rfControl){   
+  static boolean startbit;   
+  static int counter;      
+  int dur0, dur1; 
+  if (!startbit)  
+  {
+   dur0 = pulseIn(RECEIVER_PIN, LOW); 
+    if((dur0 > 9200) && (dur0 < 13800) && !startbit) {
+      lambda = dur0 / 23;  
+      dur0 = 0;  
+      buffer = 0;  
+      counter = 0;  
+      startbit = true;  
+    }
+  }  
+  if (startbit && counter < 28)  
+  {  
+    ++counter;  
+    dur1 = pulseIn(RECEIVER_PIN, HIGH);  
+    if((dur1 > 0.5 * lambda) && (dur1 < (1.5 * lambda))) {  
+      buffer = (buffer << 1) + 1;  
+    }  
+    else if((dur1 > 1.5 * lambda) && (dur1 < (2.5 * lambda))) {  
+      buffer = (buffer << 1);    
+    }  
+    else {
+      startbit = false;  
+    }  
+  }  
+  if (counter==28) {
+    if ((bitRead(buffer, 0) == 1) && (bitRead(buffer, 1) == 0) && (bitRead(buffer, 2) == 1) && (bitRead(buffer, 3) == 0)) {
+      counter = 0;  
+      startbit = false;  
+      //Get ADDRESS CODE from Buffer  
+      _rfControl.addr = buffer >> 6;  
+      //Get Buttons from Buffer  
+       _rfControl.btn1 = bitRead(buffer,4);  
+       _rfControl.btn2 = bitRead(buffer,5);   
+      //If a valid data is received, return OK  
+      return true;  
+    }
+    else {
+      startbit = false;  
+    }
+  }
+  //If none valid data is received, return NULL and FALSE values   
+  _rfControl.addr = NULL;  
+  _rfControl.btn1 = NULL;  
+  _rfControl.btn2 = NULL;   
+  return false;  
+ }  
 
 void startRcLearning() {
 #if DEBUG
   Serial.println(F("learn mode activated")); 
 #endif
   rcMode = 'l';
-  rcModeTick = 5000;
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-Type: text/html");
-  client.println("Access-Control-Allow-Origin: *");
+  rcModeTick = 1000;
+  client.println(F("HTTP/1.1 200 OK"));
+  client.println(F("Content-Type: text/html"));
+  client.println(F("Access-Control-Allow-Origin: *"));
   client.println();
-  client.print("{'code':'");
-
-  //showSuccess("msg", "Started Successful");
+  client.print(F("{'code':'"));
 }
 
 void writeBufferLearning(unsigned int length, unsigned int* raw) {
   for (int i=0; i<= length*2; i++) {
     rcModeTick--;
-
-    //rcBuffer += raw[i];
-
 #if DEBUG
     Serial.print(raw[i]);
     Serial.print(F(","));
@@ -307,11 +298,9 @@ void writeBufferLearning(unsigned int length, unsigned int* raw) {
     if (client) {
       client.print(raw[i]);
     }
-
     if (rcModeTick < 0) {
       rcMode = 's';
-
-      client.print("'}");
+      client.print(F("'}"));
       closeConnection();
       break;
     }
@@ -320,7 +309,6 @@ void writeBufferLearning(unsigned int length, unsigned int* raw) {
       client.print(F(","));
       client.flush();
     }
-    
   }
 }
 
@@ -332,12 +320,10 @@ void showError() {
   client.println("HTTP/1.1 404 Not Found");
   client.println("Content-Type: text/html");
   client.println();
-
   closeConnection();
 }
 
 void showSuccess(char* key, char* value) {
-
 #if DEBUG
   Serial.println(F("success"));
 #endif
@@ -351,31 +337,21 @@ void showSuccess(char* key, char* value) {
   client.print("':'");
   client.print(value);
   client.print("'}");
-
   closeConnection();
 }
 
 void closeConnection() {
-
-// give the web browser time to receive the data
   delay(1);
-
-  // close the connection:
-  //client.stop();
   client.stop();
   while(client.status() != 0){
     delay(5);
   }
-
 }
 
-//let’s build our instruments:
 void customDelay(unsigned long time) {
-    unsigned long end_time = micros() + time;
-    while(micros() < end_time);
+  unsigned long end_time = micros() + time;
+  while(micros() < end_time);
 }
-
-//1000=1ms
 
 void setStateWithDelay(int pin, int state,int delayTime) {
 #if DEBUG
@@ -392,8 +368,40 @@ void setStateWithDelay(int pin, int state,int delayTime) {
   customDelay(delayTime);
 }
 
-void rcExecute(char strCode[]) {
 
+void ppaExecute(char strCode[]) {
+
+  char* codes = strCode;
+  //String strCodes = String(codes);
+  int delayTime = 500;
+  //int startDelayTime = strtok(NULL,",");
+#if DEBUG
+  Serial.println(F("Delay: "));
+  Serial.println(delayTime);
+  Serial.println(F("Codes: "));
+  Serial.println(codes);
+  Serial.println(F("Size: "));
+  Serial.println(strlen(codes));
+#endif
+
+  for(int j=0; j<10; j++){
+    setStateWithDelay(TRANSMITTER_PIN,0,11284);
+    setStateWithDelay(TRANSMITTER_PIN,1,delayTime);
+    for (int i = 0; i < strlen(codes) ; i++) {
+      int code = (codes[i] - '0') + 1;
+      int code2 = 1;
+      if (code == 1) { 
+        code2 = 2;
+      }
+      setStateWithDelay(TRANSMITTER_PIN,0,delayTime * code);
+      setStateWithDelay(TRANSMITTER_PIN,1,delayTime * code2);
+    }
+    setStateWithDelay(TRANSMITTER_PIN,0,delayTime);
+  }
+  showSuccess("msg", "success");
+}
+
+void rcExecute(char strCode[]) {
   char* strDelayTime = strtok(strCode,"-");
   char* codes = strtok(NULL,"-");
   //String strCodes = String(codes);
@@ -406,12 +414,9 @@ void rcExecute(char strCode[]) {
   Serial.println(codes);
   Serial.println(F("Size: "));
   Serial.println(strlen(codes));
-
 #endif
-
   for(int j=0; j<10; j++){
     setStateWithDelay(TRANSMITTER_PIN,0,11284);
-
     for (int i = 0; i < strlen(codes) ; i++) {
       int code = (codes[i] - '0') + 1;
       setStateWithDelay(TRANSMITTER_PIN,(i + 1) % 2,delayTime * code);
@@ -419,6 +424,4 @@ void rcExecute(char strCode[]) {
     digitalWrite(TRANSMITTER_PIN,LOW);
   }
   showSuccess("msg", "success");
-
-
 }
